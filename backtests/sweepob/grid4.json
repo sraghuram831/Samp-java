@@ -1,0 +1,160 @@
+{
+ "rr3_be1 (v1.10)": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5
+ },
+ "rr0.5": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 0.5,
+  "be_r": 0
+ },
+ "rr0.75": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 0.75,
+  "be_r": 0
+ },
+ "rr1": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 1.0,
+  "be_r": 0
+ },
+ "rr1_be0.5": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 1.0,
+  "be_r": 0.5
+ },
+ "rr1.5": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 1.5,
+  "be_r": 0
+ },
+ "rr1.5_be1": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 1.5,
+  "be_r": 1.0
+ },
+ "rr2": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 2.0,
+  "be_r": 0
+ },
+ "trail s1 d1 noTP": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 50,
+  "be_r": 0,
+  "trail_start_r": 1,
+  "trail_dist_r": 1
+ },
+ "trail s1 d0.5 noTP": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 50,
+  "be_r": 0,
+  "trail_start_r": 1,
+  "trail_dist_r": 0.5
+ },
+ "trail s0.5 d0.5 noTP": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 50,
+  "be_r": 0,
+  "trail_start_r": 0.5,
+  "trail_dist_r": 0.5
+ },
+ "trail s0.5 d0.25 noTP": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 50,
+  "be_r": 0,
+  "trail_start_r": 0.5,
+  "trail_dist_r": 0.25
+ },
+ "trail s1.5 d1 noTP": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 50,
+  "be_r": 0,
+  "trail_start_r": 1.5,
+  "trail_dist_r": 1
+ },
+ "rr1 + trail s0.5 d0.25": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 1.0,
+  "be_r": 0,
+  "trail_start_r": 0.5,
+  "trail_dist_r": 0.25
+ },
+ "rr2 + trail s1 d0.5": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 2.0,
+  "be_r": 0,
+  "trail_start_r": 1,
+  "trail_dist_r": 0.5
+ },
+ "rr3 + trail s1 d1": {
+  "sl_buffer_pts": 50,
+  "reduce_after": 2,
+  "reduced_mult": 0.5,
+  "pause_after": 3,
+  "pause_setups": 5,
+  "rr": 3.0,
+  "be_r": 0,
+  "trail_start_r": 1,
+  "trail_dist_r": 1
+ }
+}

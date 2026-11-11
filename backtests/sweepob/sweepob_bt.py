@@ -26,7 +26,8 @@ P = dict(htf_len=10, ltf_len=5, ltf_sec=60, max_htf_ob=6, use_htf_ob=True, use_p
          kz=["05:30-08:30", "12:30-14:30", "18:30-20:30"], kz_on=[True, True, True],
          ob_level="near", entry_mode="limit", limit_expiry_bars=30, sl_buffer_pts=20, max_sl_pts=0,
          min_sl_pts=0, rr=3.0, be_r=1.0, max_trades_day=3, one_per_kz=True, bias_mode="htf",
-         max_spread_pts=0, reduce_after=0, reduced_mult=0.5, pause_after=0, pause_setups=5)
+         max_spread_pts=0, reduce_after=0, reduced_mult=0.5, pause_after=0, pause_setups=5,
+         trail_start_r=0, trail_dist_r=1.0, trail_step_pts=10)
 
 
 class SMC:
@@ -194,8 +195,8 @@ def backtest(data, point, spread_pips, pip, warmup_days=21, params=P, label=""):
                            sl0=pos['sl0'], tp=pos['tp'], exit=exit_px, why=why, kind=pos['kind'],
                            R=pnl / pos['risk'], pips=pnl / pip, risk_pips=pos['risk'] / pip,
                            open_utc=pos['utc'], w=pos.get('w', 1.0)))
-        if why == 'SL': ms['streak'] += 1
-        elif why == 'TP' or (why == 'EOD' and pnl > 0): ms['streak'] = 0
+        if pnl < -2 * point: ms['streak'] += 1          # loss (break-even closes are ignored, like the EA)
+        elif pnl > 2 * point: ms['streak'] = 0
         pos = None
 
     def add_entry(tt):
@@ -213,17 +214,21 @@ def backtest(data, point, spread_pips, pip, warmup_days=21, params=P, label=""):
                            risk=abs(order['entry'] - order['sl']), t=tt, utc=uu, kind='limit', w=order['w'])
                 add_entry(tt); order = None
         if pos is not None:
-            d = pos['dir']; be = params['be_r']
-            if d == 1:
-                if p <= pos['sl']: return close_pos(pos['sl'], tt, 'BE' if pos['sl'] == pos['entry'] else 'SL')
-                if p >= pos['tp']: return close_pos(pos['tp'], tt, 'TP')
-                if be > 0 and pos['sl'] < pos['entry'] and p - pos['entry'] >= be * (pos['entry'] - pos['sl']):
-                    pos['sl'] = pos['entry']
-            else:
-                if ask >= pos['sl']: return close_pos(pos['sl'], tt, 'BE' if pos['sl'] == pos['entry'] else 'SL')
-                if ask <= pos['tp']: return close_pos(pos['tp'], tt, 'TP')
-                if be > 0 and pos['sl'] > pos['entry'] and pos['entry'] - ask >= be * (pos['sl'] - pos['entry']):
-                    pos['sl'] = pos['entry']
+            d = pos['dir']; be = params['be_r']; R0 = pos['risk']
+            ts, td = params['trail_start_r'], params['trail_dist_r']
+            def why_sl():
+                if pos['sl'] == pos['entry']: return 'BE'
+                return 'TRAIL' if (pos['sl'] - pos['entry']) * d > 0 else 'SL'
+            px = p if d == 1 else ask                     # price the position closes at
+            if (d == 1 and px <= pos['sl']) or (d == -1 and px >= pos['sl']): return close_pos(pos['sl'], tt, why_sl())
+            if (d == 1 and px >= pos['tp']) or (d == -1 and px <= pos['tp']): return close_pos(pos['tp'], tt, 'TP')
+            prof = (px - pos['entry']) * d
+            if be > 0 and (pos['sl'] - pos['entry']) * d < 0 and prof >= be * R0:
+                pos['sl'] = pos['entry']
+            if ts > 0 and prof >= ts * R0:
+                nsl = px - d * td * R0
+                if (nsl - pos['sl']) * d >= params['trail_step_pts'] * point:
+                    pos['sl'] = npx(nsl)
 
     def run_bar_ticks(i):
         s = cur_spread[0]
@@ -236,10 +241,10 @@ def backtest(data, point, spread_pips, pip, warmup_days=21, params=P, label=""):
                 if order is not None: levels.append(order['entry'] - (s if order['dir'] == 1 else 0))
                 if pos is not None:
                     be = params['be_r'] if params['be_r'] > 0 else 1e9
-                    if pos['dir'] == 1:
-                        levels += [pos['sl'], pos['tp'], pos['entry'] + be * (pos['entry'] - pos['sl'])]
-                    else:
-                        levels += [pos['sl'] - s, pos['tp'] - s, pos['entry'] - be * (pos['sl'] - pos['entry']) - s]
+                    ts = params['trail_start_r'] if params['trail_start_r'] > 0 else 1e9
+                    R0 = pos['risk']; dd = pos['dir']; sh = 0 if dd == 1 else -s   # ask-based levels for sells
+                    levels += [pos['sl'] + sh, pos['tp'] + sh, pos['entry'] + dd * be * R0 + sh,
+                               pos['entry'] + dd * ts * R0 + sh]
                 hits = sorted([x for x in levels if lo_ <= x <= hi_], reverse=(q < prev))
                 if not hits: break
                 before = (id(order), id(pos), pos['sl'] if pos else None)

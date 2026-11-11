@@ -1,7 +1,7 @@
-# SweepOB EA – backtests, bug fixes (v1.10) and loss-recovery tests
+# SweepOB EA – backtests, bug fixes and RR / trailing-stop tests
 
-`SweepOB_EA.mq5` (now v1.10) is ported bar-for-bar to Python in `sweepob_bt.py`, and every result here comes from that port.
-MetaTrader 5 can't run in this environment, so none of this is a Strategy Tester run, and the v1.10 EA has **not been compiled**.
+`SweepOB_EA.mq5` (now v1.20) is ported bar-for-bar to Python in `sweepob_bt.py`, and every result here comes from that port.
+MetaTrader 5 can't run in this environment, so none of this is a Strategy Tester run, and the v1.10/v1.20 EA has **not been compiled**.
 Compile it in MetaEditor before you use it.
 
 ## Data
@@ -73,8 +73,40 @@ Martingale and drawdown-recovery sizing turn a slow loss into a near wipe-out, b
 They only "work" on a rule set that is already about break-even, and then only by luck: one run made +40% while risking 8% on a single trade.
 The only recovery that actually helps is the defensive kind (cut risk or pause during a streak), which is what v1.10 adds.
 
+
+## v1.20 – lower reward:risk and trailing stop (`grid4*.json`)
+Every row uses the v1.10 base: SL buffer 50 points plus loss-streak protection. R totals: IS = majors Apr–Jun 2026, OOS = majors Jul–Sep 2026.
+
+| Exit | Win % | IS R | OOS R | GBPCAD R | Total R | PF | Max DD (R) |
+|---|---|---|---|---|---|---|---|
+| 1:3, BE at 1R (v1.10) | 12.9 | -2.5 | -4.0 | -5.5 | -12.0 | 0.69 | 18.5 |
+| 1:2 | – | -6.0 | -7.0 | -2.5 | -15.5 | 0.70 | 22.5 |
+| 1:1.5 | 33.8 | -10.0 | -4.5 | +4.5 | -10.0 | 0.79 | 19.8 |
+| **1:1** | **48.9** | -2.0 | **+2.0** | -1.5 | **-1.5** | **0.97** | **11.5** |
+| 1:1, BE at 0.5R | – | -4.5 | +0.5 | -5.5 | -9.5 | 0.74 | 12.0 |
+| 1:0.75 | 50.5 | -3.4 | -2.9 | -3.9 | -10.1 | 0.78 | 13.9 |
+| 1:0.5 | 59.4 | -2.0 | -4.2 | -5.0 | -11.3 | 0.71 | 14.3 |
+| Trail: start 1R, distance 0.5R, no TP | 48.9 | -3.8 | -1.8 | -2.8 | -8.4 | 0.81 | 14.8 |
+| Trail: start 1R, distance 1R, no TP | – | -3.3 | -4.4 | -6.0 | -13.6 | 0.68 | 18.0 |
+| Trail: start 0.5R, distance 0.5R, no TP | – | -6.0 | -1.9 | -6.2 | -14.2 | 0.63 | 18.5 |
+| Trail: start 0.5R, distance 0.25R, no TP | – | -5.2 | -4.6 | -6.1 | -15.8 | 0.60 | 17.8 |
+| Trail: start 1.5R, distance 1R, no TP | – | -3.2 | -8.8 | -0.8 | -12.8 | 0.72 | 18.7 |
+| 1:1 + trail 0.5R / 0.25R | – | -4.4 | -4.4 | -5.9 | -14.6 | 0.63 | 16.6 |
+| 1:2 + trail 1R / 0.5R | 48.9 | -2.6 | -1.5 | -2.6 | -6.7 | 0.85 | 13.6 |
+| 1:3 + trail 1R / 1R | – | 0.0 | -4.7 | -6.0 | -10.7 | 0.76 | 14.0 |
+
+Win rate needed to break even: 66.7% at 1:0.5, 57.1% at 1:0.75, 50% at 1:1.
+The low ratios win more often (59% at 1:0.5) but stay short of break-even, so the spread decides the result.
+**1:1 is the best exit tested** and is close to break-even (49% wins). Trailing stops cut the losers no faster than a fixed SL. They mostly trim winners, and none beat a fixed 1:1 target.
+With PDH/PDL zones only, every exit lands between -9R and +6R on 35–40 trades (`grid4_pd_results.csv`), which is too few trades to tell apart.
+
+**v1.20 defaults:** `InpRR = 1.0`, `InpBreakEvenR = 0` (break-even at +1R is pointless with a 1R target).
+Trailing is available but off: `InpTrailStartR` (0 = off), `InpTrailDistR`, `InpTrailStepPoints`. `InpRR = 0` means no fixed TP, leaving the trailing stop to close the trade.
+The trail is measured from the original SL distance, which the EA reads from the opening order in history, so it still works after the SL has moved.
+
 ## Bottom line
-* The v1.10 defaults cut the loss by about 64% (-33R → -12R) and halve the drawdown, but the strategy is still negative on these pairs.
+* v1.00 → v1.10 cut the loss from -33R to -12R. v1.20 (1:1) brings it to about break-even (-1.5R over 92 trades, max DD 11.5R).
+  That is an improvement, not an edge: the strategy is still not profitable on these pairs.
 * Using only PDH/PDL zones plus loss-streak protection is the only version that came out positive in-sample and out-of-sample on the majors (+6R over 36 trades). It still lost on GBPCAD, and 36 trades is far too few to trust.
   Forward-test it on a demo before risking money.
 * Keep the risk per trade small. Don't add martingale.

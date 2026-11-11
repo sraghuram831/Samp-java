@@ -21,9 +21,11 @@
 //|   v1.10: tester DST-aware server clock, OB tracked by time not   |
 //|   index, per-symbol daily P&L, lot-cap warning, SL buffer 50,    |
 //|   min SL, market entry option, loss-streak risk cut + pause.     |
+//|   v1.20: default RR 1:1 (BE off), trailing stop in R, RR 0 =     |
+//|   no fixed TP.                                                   |
 //+------------------------------------------------------------------+
 #property copyright "R"
-#property version   "1.10"
+#property version   "1.20"
 #property description "H1 order block + M1 sweep/CHoCH + M1 order block entry, LuxAlgo-style SMC markings"
 
 #include <Trade/Trade.mqh>
@@ -69,8 +71,11 @@ input int    InpLimitExpiryBars    = 30;    // Cancel unfilled limit after N LTF
 input double InpSLBufferPoints     = 50;    // SL buffer beyond OB / sweep (points) - was 20, 50 tested better
 input double InpMinSLPoints        = 0;     // Min SL size in points, SL pushed out if smaller (0 = off)
 input double InpMaxSLPoints        = 0;     // Max SL size in points (0 = off)
-input double InpRR                 = 3.0;   // Reward : Risk
-input double InpBreakEvenR         = 1.0;   // Move SL to entry at +R (0 = off)
+input double InpRR                 = 1.0;   // Reward : Risk, e.g. 1 = 1:1, 0.5 = 1:0.5 (0 = no TP, use trailing)
+input double InpBreakEvenR         = 0;     // Move SL to entry at +R (0 = off)
+input double InpTrailStartR        = 0;     // Start trailing at +R profit (0 = off)
+input double InpTrailDistR         = 0.5;   // Trail distance behind price, in R
+input double InpTrailStepPoints    = 10;    // Min SL improvement per modify (points)
 
 input group "=== Risk ==="
 input ENUM_LOT_MODE InpLotMode     = LOT_RISK_PERCENT; // Lot mode
@@ -793,6 +798,7 @@ void DrawSetup(const BreakEvt &e, datetime t, double entry, double sl, double tp
    DrawRect(o, e.obT, e.obTop, t + sec * 10, e.obBot, InpLTFOBColor);
    DrawText(o + "_t", e.obT, e.dir == 1 ? e.obBot : e.obTop, "OB", clrDimGray, 8, e.dir == 1 ? ANCHOR_LEFT_UPPER : ANCHOR_LEFT_LOWER);
    if(entry <= 0) return;
+   if(tp <= 0) tp = (e.dir == 1) ? entry + MathAbs(entry - sl) : entry - MathAbs(entry - sl);   // no TP: show 1R
    string rk = NewName("RISK");
    Track(rk);
    DrawRect(rk, t, sl, t + sec * 40, entry, C'255,205,210');
@@ -833,7 +839,7 @@ bool PlanTrade(int dir, const BreakEvt &e, double ext, double &entry, double &sl
       sl = (dir == -1) ? entry + InpMinSLPoints * pt : entry - InpMinSLPoints * pt;
    double risk = MathAbs(entry - sl);
    if(InpMaxSLPoints > 0 && risk / pt > InpMaxSLPoints) return false;
-   tp = (dir == -1) ? entry - InpRR * risk : entry + InpRR * risk;
+   tp = (InpRR <= 0) ? 0 : ((dir == -1) ? entry - InpRR * risk : entry + InpRR * risk);
    return true;
 }
 
@@ -871,9 +877,9 @@ bool TryEnter(int dir, const BreakEvt &e, double ext, const MqlRates &b)
       entry = (dir == -1) ? tk.bid : tk.ask;
       double risk = MathAbs(entry - sl);
       if((dir == -1 && sl <= entry) || (dir == 1 && sl >= entry)) return false;
-      tp = (dir == -1) ? entry - InpRR * risk : entry + InpRR * risk;
+      tp = (InpRR <= 0) ? 0 : ((dir == -1) ? entry - InpRR * risk : entry + InpRR * risk);
    }
-   entry = NormPrice(entry); sl = NormPrice(sl); tp = NormPrice(tp);
+   entry = NormPrice(entry); sl = NormPrice(sl); if(tp > 0) tp = NormPrice(tp);
    double risk = MathAbs(entry - sl);
    long stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    if(risk < stopsLvl * _Point) { Print("SweepOB: SL inside stops level, skipped"); return false; }
@@ -1011,6 +1017,36 @@ void StrategyStep(const MqlRates &b, bool live)
 //+------------------------------------------------------------------+
 //| Trade management                                                 |
 //+------------------------------------------------------------------+
+// Original SL distance of a position (trailing/BE need it after the SL has moved).
+// Read once from the opening order in history, then cached by position ticket.
+ulong  g_riskTk[];
+double g_riskVal[];
+double InitialRisk(ulong ticket, long posId, double fallback)
+{
+   for(int i = 0; i < ArraySize(g_riskTk); i++) if(g_riskTk[i] == ticket) return g_riskVal[i];
+   double r = 0;
+   if(HistorySelectByPosition(posId))
+   {
+      for(int i = 0; i < HistoryOrdersTotal(); i++)
+      {
+         ulong o = HistoryOrderGetTicket(i);
+         if(o == 0) continue;
+         double osl = HistoryOrderGetDouble(o, ORDER_SL);
+         double opx = HistoryOrderGetDouble(o, ORDER_PRICE_OPEN);
+         if(osl > 0 && opx > 0) { r = MathAbs(PositionGetDouble(POSITION_PRICE_OPEN) - osl); break; }
+      }
+   }
+   if(r <= 0) r = fallback;          // e.g. history not available yet
+   else
+   {
+      int n = ArraySize(g_riskTk);
+      if(n >= 50) { ArrayRemove(g_riskTk, 0, 1); ArrayRemove(g_riskVal, 0, 1); n--; }
+      ArrayResize(g_riskTk, n + 1); ArrayResize(g_riskVal, n + 1);
+      g_riskTk[n] = ticket; g_riskVal[n] = r;
+   }
+   return r;
+}
+
 void ManageOpen()
 {
    MqlTick tk;
@@ -1029,7 +1065,7 @@ void ManageOpen()
       if(type == ORDER_TYPE_BUY_LIMIT  && osl > 0 && tk.ask <= osl) kill = true;
       if(kill) trade.OrderDelete(t);
    }
-   if(InpBreakEvenR <= 0) return;
+   if(InpBreakEvenR <= 0 && InpTrailStartR <= 0) return;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong t = PositionGetTicket(i);
@@ -1040,10 +1076,29 @@ void ManageOpen()
       double tp = PositionGetDouble(POSITION_TP);
       long type = PositionGetInteger(POSITION_TYPE);
       if(sl <= 0) continue;
-      if(type == POSITION_TYPE_SELL && sl > op && (op - tk.ask) >= InpBreakEvenR * (sl - op))
-         trade.PositionModify(t, NormPrice(op), tp);
-      if(type == POSITION_TYPE_BUY && sl < op && (tk.bid - op) >= InpBreakEvenR * (op - sl))
-         trade.PositionModify(t, NormPrice(op), tp);
+      double r0 = InitialRisk(t, PositionGetInteger(POSITION_IDENTIFIER), MathAbs(op - sl));
+      if(r0 <= 0) continue;
+      int d = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double px = (d == 1) ? tk.bid : tk.ask;              // price the position would close at
+      double prof = (px - op) * d;
+      double nsl = sl;
+      // break-even
+      if(InpBreakEvenR > 0 && (sl - op) * d < 0 && prof >= InpBreakEvenR * r0) nsl = op;
+      // trailing stop: once +InpTrailStartR, keep the SL InpTrailDistR behind price; it only ever tightens
+      if(InpTrailStartR > 0 && prof >= InpTrailStartR * r0)
+      {
+         double tsl = px - d * InpTrailDistR * r0;
+         if((tsl - nsl) * d > 0) nsl = tsl;
+      }
+      nsl = NormPrice(nsl);
+      double minMove = (nsl == NormPrice(op) && (sl - op) * d < 0) ? _Point : InpTrailStepPoints * _Point;
+      if((nsl - sl) * d >= minMove)
+      {
+         // respect the broker's minimum stop distance
+         long lvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+         if(MathAbs(px - nsl) >= lvl * _Point)
+            trade.PositionModify(t, nsl, tp);
+      }
    }
 }
 
