@@ -1,54 +1,90 @@
-# SweepOB EA – backtest on major FX pairs
+# SweepOB EA – backtests, bug fixes (v1.10) and loss-recovery tests
 
-The EA (`SweepOB_EA.mq5`) was ported bar-for-bar to Python (`sweepob_bt.py`) and run on M1 data.
-MetaTrader 5 cannot run in this environment, so this is a re-implementation, not a Strategy Tester run.
+`SweepOB_EA.mq5` (now v1.10) is ported bar-for-bar to Python in `sweepob_bt.py`, and every result here comes from that port.
+MetaTrader 5 can't run in this environment, so none of this is a Strategy Tester run, and the v1.10 EA has **not been compiled**.
+Compile it in MetaEditor before you use it.
 
 ## Data
-* Source: getdata-finance free M1 samples on GitHub (MIT), e.g. `github.com/getdata-finance/eurusd-1m-ohlcv-forex-historical-data`
-* Pairs: EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD (NZDUSD not available)
-* Period: 2026-03-26 → 2026-09-25 (≈6 months). The first 21 days are warm-up (structure/history only), so trading starts mid-April.
-* Bars treated as BID; ASK = BID + spread. Spreads (pips): EURUSD 1.0, GBPUSD 1.4, USDJPY 1.2, USDCHF 1.5, AUDUSD 1.2, USDCAD 1.6
+| Set | Pairs | Period | Spread |
+|---|---|---|---|
+| Majors | EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, USDCAD | 2026-03-26 → 2026-09-25 (M1, getdata-finance free samples, MIT) | fixed 1.0–1.6 pips |
+| GBPCAD | GBPCAD | 2018-01-01 → 2018-06-04 (Dukascopy ticks from `FX-Data/FX-Data-GBPCAD-DS`, converted with `ticks2m1.py`) | real per-minute spread, median 3.1 pips |
 
-## Simulation assumptions
-* Server time UTC+3 (summer, the whole window is US-DST), so H1/D1 bars align like a typical MT5 broker; killzones are evaluated in true IST.
-* Intrabar fills follow the MT5 "1 minute OHLC" path (O→L→H→C for up bars, O→H→L→C for down bars).
-* All EA defaults: H1 len 10, M1 len 5, sweep + CHoCH required, OB near-edge limit, 30-bar expiry, SL buffer 20 pts, RR 3, BE at +1R, max 3 trades/day, one setup per killzone, one exposure at a time.
-* Results are in R (multiples of initial risk). Money is not modelled because the default `InpMaxLot = 0.02` caps the size well below 0.5% risk on most accounts.
+No 2026 GBPCAD data was reachable, so GBPCAD is tested on a different year and doubles as an out-of-sample market.
+The first 21 days of each set are warm-up.
 
-## Results – EA defaults
-| Pair | Trades | TP | SL | BE | Total R | Pips | Median SL (pips) |
+**In-sample (IS)** = majors April–June 2026. **Out-of-sample (OOS)** = majors July–September 2026.
+
+## Simulation
+* Broker clock: "New York close" (GMT+2 in winter, GMT+3 during US DST). Killzones are evaluated in true IST.
+* Order handling runs on M1 like MT5's "1 minute OHLC" mode (O→L→H→C for up bars, O→H→L→C for down bars). Bars are BID and ASK = BID + spread.
+* Results are in R, the multiple of the risk on each trade (scaled by the risk multiplier during a loss streak).
+
+## Bugs fixed in v1.10
+1. **Tester killzones were an hour early during US DST.** `InpTesterGMTOffsetMin` was one fixed offset for the whole year. The new `InpTesterTZ = TZ_NY_CLOSE` switches GMT+2/GMT+3 on the US DST dates. `TZ_FIXED` keeps the old behaviour. Live trading was never affected.
+2. **The armed H1 order block was stored as an array index.** The OB array shifts once it holds 200 entries, so the index could point at the wrong block and the mitigation-cancel check would test the wrong zone. It's now stored by candle time (`g_zOBT`) and looked up with `FindOBByTime`.
+3. **`DailyStats` counted open positions on other symbols** (same magic number) in this chart's daily P&L, which could trigger the daily-loss stop. It now filters by symbol.
+4. **The lot cap overrode the risk % without telling you.** `InpMaxLot = 0.02` is still the default, so your safety cap isn't loosened. The EA now prints a warning when the cap makes the real risk smaller than `InpRiskPercent`.
+5. **Minor:** the out-of-window order-block scan in `FindOB` broke ties toward the older candle, while the in-window scan picks the newer one. Both now pick the newer candle.
+
+## New options in v1.10
+| Input | Default | Purpose |
+|---|---|---|
+| `InpSLBufferPoints` | **50** (was 20) | Wider SL buffer. It was the most consistent single improvement. |
+| `InpMinSLPoints` | 0 | Push the SL out to a minimum size. |
+| `InpEntryMode` | limit | `ENTRY_MARKET` enters on the CHoCH bar instead of the OB limit (tested worse). |
+| `InpReduceAfterLosses` / `InpReducedRiskMult` | 2 / 0.5 | Halve risk after 2 losses in a row; full risk returns after a win. |
+| `InpPauseAfterLosses` / `InpPauseSetups` | 3 / 5 | After 3 losses in a row, skip the next 5 valid setups. |
+| `InpTesterTZ` | NY close | See bug 1. |
+
+There is deliberately no martingale or "recover the drawdown" sizing (see below).
+
+## Results
+
+### Before vs after (all pairs)
+| Config | IS R | OOS R | GBPCAD R | Total R | Trades | PF | Max DD (R) |
 |---|---|---|---|---|---|---|---|
-| AUDUSD | 13 | 1 | 9 | 3 | -6.0 | -23.2 | 4.3 |
-| EURUSD | 13 | 1 | 5 | 7 | -2.0 | +5.9 | 5.3 |
-| GBPUSD | 15 | 1 | 8 | 6 | -5.0 | -36.6 | 5.5 |
-| USDCAD | 11 | 1 | 8 | 2 | -5.0 | -35.8 | 4.2 |
-| USDCHF | 14 | 0 | 11 | 3 | -11.0 | -77.4 | 7.5 |
-| USDJPY | 15 | 5 | 6 | 4 | +9.0 | +152.8 | 6.8 |
-| **All** | **81** | **9** | **47** | **25** | **-20.0** | | |
+| v1.00 defaults | -12.0 | -8.0 | -13.0 | **-33.0** | 105 | 0.48 | 41.0 |
+| v1.00 with the tester clock bug | -13.0 | -1.0 | -9.0 | -23.0 | 107 | 0.61 | 34.0 |
+| v1.10, SL buffer 50 only | -3.0 | -3.0 | -10.0 | -16.0 | 104 | 0.72 | 25.0 |
+| **v1.10 defaults** (buffer 50 + loss-streak protection) | -2.5 | -4.0 | -5.5 | **-12.0** | 85 | 0.69 | 18.5 |
+| v1.10 + PDH/PDL zones only (`InpUseHTFOB=false`) | +4.0 | +4.5 | -2.5 | **+6.0** | 36 | 1.40 | 5.5 |
 
-Win rate 11%, profit factor 0.57, average -0.25R per trade, max drawdown 32R (≈16% at 0.5% risk).
+Fixing the clock bug puts the killzones where you meant them, but it doesn't make the strategy better. The hour-early version was just as negative.
 
-## Sensitivity (all six pairs)
-| Config | Trades | Win % | Total R | Avg R | Max DD (R) | PF |
-|---|---|---|---|---|---|---|
-| EA defaults | 81 | 11.1 | -20.0 | -0.25 | 32.0 | 0.57 |
-| Defaults, zero spread | 89 | 12.4 | -12.0 | -0.14 | 23.0 | 0.73 |
-| No break-even | 81 | 14.8 | -33.0 | -0.41 | 45.0 | 0.52 |
-| RR 2 | 82 | 15.9 | -21.0 | -0.26 | 28.0 | 0.55 |
-| RR 2, no BE | 82 | 22.0 | -28.0 | -0.34 | 35.0 | 0.56 |
-| Entry at OB midpoint | 62 | 12.9 | -15.0 | -0.24 | 20.9 | 0.62 |
-| Bias = both sides | 213 | 8.9 | -81.0 | -0.38 | 95.0 | 0.41 |
-| SL buffer 50 pts | 80 | 16.2 | -6.0 | -0.08 | 17.0 | 0.87 |
+### GBPCAD (2018)
+24 trades with v1.00 defaults: 1 TP, 16 SL, 7 break-even, **-13R**. With v1.10 defaults: 19 trades, -5.5R.
+A ~3-pip spread against 5–8-pip M1 stops is too expensive. This setup isn't suited to GBPCAD at M1 unless your broker's spread is well under 2 pips.
 
-## Takeaways
-* No configuration tested is profitable; the edge is negative even with zero spread.
-* M1 order-block stops are tiny (median 4–7 pips), so a 1–1.5 pip spread is ~20–30% of the risk on every trade, and stops get tagged by noise. A wider SL buffer was the single most helpful change.
-* Only ~13 trades per pair in 5 months: the sample is small, so treat USDJPY's positive result as noise, not an edge.
-* About 60% of limit orders expire unfilled within 30 bars.
+### Other rule changes tested (`grid1`/`grid2`)
+None was profitable in every segment. Clearly worse: market entry, an M1 structure length of 3, trading both directions, no break-even, the London+NY killzones only.
+M5/M15 as the entry timeframe produced too few trades (7–30) to judge. Full tables: `grid1_results.csv`, `grid2_results.csv`, `grid3_results.csv`.
+
+### Money-management "recovery" (applied to the trade list, 0.5% base risk)
+| Trades | Scheme | Return % | Max DD % | Largest risk on one trade |
+|---|---|---|---|---|
+| v1.00 defaults | fixed 0.5% | -15.4 | 18.7 | 0.5% |
+| v1.00 defaults | martingale (x2 after a loss, 4 steps) | **-90.1** | 92.9 | 8% |
+| v1.00 defaults | size to win back the drawdown in one TP | **-91.8** | 95.4 | 8% |
+| v1.00 defaults | halve risk after 2 losses | -8.5 | 11.4 | 0.5% |
+| v1.00 defaults | pause 5 setups after 3 losses | -7.3 | 10.9 | 0.5% |
+
+Martingale and drawdown-recovery sizing turn a slow loss into a near wipe-out, because the strategy's expectancy is negative and it has long losing streaks (an 11% win rate at RR 3).
+They only "work" on a rule set that is already about break-even, and then only by luck: one run made +40% while risking 8% on a single trade.
+The only recovery that actually helps is the defensive kind (cut risk or pause during a streak), which is what v1.10 adds.
+
+## Bottom line
+* The v1.10 defaults cut the loss by about 64% (-33R → -12R) and halve the drawdown, but the strategy is still negative on these pairs.
+* Using only PDH/PDL zones plus loss-streak protection is the only version that came out positive in-sample and out-of-sample on the majors (+6R over 36 trades). It still lost on GBPCAD, and 36 trades is far too few to trust.
+  Forward-test it on a demo before risking money.
+* Keep the risk per trade small. Don't add martingale.
 
 ## Reproduce
 ```
-git clone --depth 1 https://github.com/getdata-finance/eurusd-1m-ohlcv-forex-historical-data data/eurusd   # same for gbpusd, usdjpy, usdchf, audusd, usdcad
-python3 sweepob_bt.py data 1.0 base                 # args: data dir, spread multiplier, tag, optional JSON param overrides
-python3 sweepob_bt.py data 1.0 buf50 '{"sl_buffer_pts":50}'
+# majors: git clone --depth 1 https://github.com/getdata-finance/<pair>-1m-ohlcv-forex-historical-data data/<pair>
+# GBPCAD: download hourly tick CSVs from github.com/FX-Data/FX-Data-GBPCAD-DS (branch GBPCAD-2018), then
+python3 ticks2m1.py <tick_dir> data/gbpcad/GBPCAD_1m.csv
+python3 sweepob_bt.py data mytag '{"sl_buffer_pts":50,"use_htf_ob":false}'   # single run
+python3 experiments.py grid3.json                                              # IS / OOS / GBPCAD table
+python3 recovery.py runs/trades_v100_defaults.csv                              # money-management schemes
 ```

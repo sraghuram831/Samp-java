@@ -17,9 +17,13 @@
 //|                                                                  |
 //|   SMC logic re-implemented from the published LuxAlgo "Smart     |
 //|   Money Concepts" rules. Not LuxAlgo's source code.              |
+//|                                                                  |
+//|   v1.10: tester DST-aware server clock, OB tracked by time not   |
+//|   index, per-symbol daily P&L, lot-cap warning, SL buffer 50,    |
+//|   min SL, market entry option, loss-streak risk cut + pause.     |
 //+------------------------------------------------------------------+
 #property copyright "R"
-#property version   "1.00"
+#property version   "1.10"
 #property description "H1 order block + M1 sweep/CHoCH + M1 order block entry, LuxAlgo-style SMC markings"
 
 #include <Trade/Trade.mqh>
@@ -27,6 +31,9 @@
 enum ENUM_BIAS_MODE { BIAS_HTF_STRUCTURE=0, BIAS_BOTH_SIDES=1 };
 enum ENUM_OB_LEVEL  { OB_NEAR_EDGE=0, OB_MIDPOINT=1 };
 enum ENUM_LOT_MODE  { LOT_RISK_PERCENT=0, LOT_FIXED=1 };
+enum ENUM_TESTER_TZ { TZ_NY_CLOSE=0,   // GMT+2 winter / GMT+3 during US DST (most MT5 brokers)
+                      TZ_FIXED=1 };    // fixed offset from InpTesterGMTOffsetMin
+enum ENUM_ENTRY_MODE { ENTRY_LIMIT_OB=0, ENTRY_MARKET=1 };
 
 input group "=== Timeframes ==="
 input ENUM_TIMEFRAMES InpHTF          = PERIOD_H1;  // Trend + order block timeframe
@@ -52,12 +59,15 @@ input group "=== Killzones (IST, HH:MM-HH:MM, empty = off) ==="
 input string InpKZ1 = "05:30-08:30";   // Killzone 1 (Asia)
 input string InpKZ2 = "12:30-14:30";   // Killzone 2 (London)
 input string InpKZ3 = "18:30-20:30";   // Killzone 3 (New York)
-input int    InpTesterGMTOffsetMin = 120; // Broker server GMT offset in minutes (TESTER only; live = auto)
+input ENUM_TESTER_TZ InpTesterTZ  = TZ_NY_CLOSE; // Server clock in the TESTER (live = auto)
+input int    InpTesterGMTOffsetMin = 120; // Fixed server GMT offset in minutes (TESTER + TZ_FIXED only)
 
 input group "=== Entry & exits ==="
+input ENUM_ENTRY_MODE InpEntryMode = ENTRY_LIMIT_OB; // Entry: limit in the M1 OB, or market on the CHoCH
 input ENUM_OB_LEVEL InpOBLevel     = OB_NEAR_EDGE; // Entry level inside the M1 order block
 input int    InpLimitExpiryBars    = 30;    // Cancel unfilled limit after N LTF bars
-input double InpSLBufferPoints     = 20;    // SL buffer beyond OB / sweep (points)
+input double InpSLBufferPoints     = 50;    // SL buffer beyond OB / sweep (points) - was 20, 50 tested better
+input double InpMinSLPoints        = 0;     // Min SL size in points, SL pushed out if smaller (0 = off)
 input double InpMaxSLPoints        = 0;     // Max SL size in points (0 = off)
 input double InpRR                 = 3.0;   // Reward : Risk
 input double InpBreakEvenR         = 1.0;   // Move SL to entry at +R (0 = off)
@@ -72,6 +82,12 @@ input double InpMaxDailyLossMoney  = 0;     // Stop for the day at this loss (mo
 input int    InpMaxTradesPerDay    = 3;     // Max trades per day
 input bool   InpOneTradePerKillzone= true;  // Only one setup per killzone
 input double InpMaxSpreadPoints    = 0;     // Max spread in points (0 = off)
+
+input group "=== Loss-streak protection (no martingale) ==="
+input int    InpReduceAfterLosses  = 2;     // Cut risk after N losses in a row (0 = off)
+input double InpReducedRiskMult    = 0.5;   // Risk multiplier while in a losing streak
+input int    InpPauseAfterLosses   = 3;     // Pause after N losses in a row (0 = off)
+input int    InpPauseSetups        = 5;     // ...by skipping the next N valid setups
 
 input group "=== Drawing ==="
 input bool   InpDrawLTFStruct      = true;  // M1 internal BOS/CHoCH (dashed)
@@ -290,8 +306,9 @@ public:
          int b = 0;
          for(int i = 1; i < n - 1; i++)
          {
-            if(dir == -1 && a[i].high > a[b].high) b = i;
-            if(dir == 1  && a[i].low  < a[b].low)  b = i;
+            // >= so ties resolve to the most recent candle, same as the in-window scan above
+            if(dir == -1 && a[i].high >= a[b].high) b = i;
+            if(dir == 1  && a[i].low  <= a[b].low)  b = i;
          }
          top = a[b].high; bot = a[b].low; t = a[b].time;
          return true;
@@ -445,6 +462,13 @@ public:
       return 0;
    }
 
+   int FindOBByTime(datetime t, int dir)
+   {
+      for(int i = ArraySize(ob) - 1; i >= 0; i--)
+         if(ob[i].t == t && ob[i].dir == dir) return i;
+      return -1;
+   }
+
    // most recent OB of direction dir that was active at time t and that the bar [lo,hi] touches
    int FindTouchedOB(int dir, datetime t, double hi, double lo)
    {
@@ -479,7 +503,11 @@ datetime g_kzT0 = 0;
 int      g_state = 0;        // 0 = waiting for price in POI, 1 = in POI, waiting for sweep + CHoCH
 int      g_dir = 0;
 double   g_zTop = 0, g_zBot = 0;
-int      g_zOB = -1;         // index into htfEng.ob (or -1 for PDH/PDL)
+datetime g_zOBT = 0;         // candle time of the armed HTF OB (0 = PDH/PDL). Bug fix (v1.10): was an
+                             // array index that went stale when the OB array shifted at 200 entries
+int      g_pauseLeft = 0;    // setups still to skip after a loss streak
+ulong    g_pauseDeal = 0;    // last losing deal that triggered a pause (streak counts after it)
+bool     g_capWarned = false;
 string   g_zLbl = "";
 double   g_ext = 0;
 double   g_liq = 0;          // M1 swing level that must be swept
@@ -506,14 +534,38 @@ bool ParseKZ(string s, int &a, int &b)
    return (a != b);
 }
 
-int ServerOffsetSec()
+// n-th Sunday (n>=1) of a month, at hh:00
+datetime NthSunday(int year, int mon, int n, int hh)
 {
-   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION)) return InpTesterGMTOffsetMin * 60;
+   MqlDateTime d; ZeroMemory(d);
+   d.year = year; d.mon = mon; d.day = 1; d.hour = hh;
+   datetime t = StructToTime(d);
+   MqlDateTime w; TimeToStruct(t, w);
+   int add = (7 - w.day_of_week) % 7 + (n - 1) * 7;
+   return t + add * 86400;
+}
+
+// US daylight saving: 2nd Sunday of March 02:00 New York (07:00 UTC) -> 1st Sunday of November 02:00 EDT (06:00 UTC)
+bool IsUSDST(datetime utc)
+{
+   MqlDateTime d; TimeToStruct(utc, d);
+   return utc >= NthSunday(d.year, 3, 2, 7) && utc < NthSunday(d.year, 11, 1, 6);
+}
+
+// Bug fix (v1.10): the tester used to apply one fixed offset all year, so with a GMT+2/GMT+3 broker
+// every killzone sat one hour early during US DST. TZ_NY_CLOSE follows the broker's DST switch.
+int ServerOffsetSec(datetime serverT)
+{
+   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION))
+   {
+      if(InpTesterTZ == TZ_FIXED) return InpTesterGMTOffsetMin * 60;
+      return IsUSDST(serverT - 2 * 3600) ? 3 * 3600 : 2 * 3600;
+   }
    long d = (long)(TimeTradeServer() - TimeGMT());
    return (int)(MathRound(d / 1800.0) * 1800);
 }
 
-long ISTSeconds(datetime serverT) { return (long)serverT - ServerOffsetSec() + 19800; }
+long ISTSeconds(datetime serverT) { return (long)serverT - ServerOffsetSec(serverT) + 19800; }
 int  ISTMinutes(datetime serverT) { long s = ISTSeconds(serverT); long m = ((s % 86400) + 86400) % 86400; return (int)(m / 60); }
 long ISTDayKey(datetime serverT)  { return ISTSeconds(serverT) / 86400; }
 
@@ -609,9 +661,42 @@ void DailyStats(double &pnl, int &trades)
    {
       ulong t = PositionGetTicket(i);
       if(t == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      // bug fix (v1.10): open positions on other symbols were counted in this chart's daily P&L
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic || PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
+}
+
+// Consecutive losing closes for this EA/symbol, newest first, stopping at a win or at the deal that
+// already triggered a pause. Break-even closes are ignored.
+int LossStreak(ulong &lastLoss)
+{
+   lastLoss = 0;
+   if(!HistorySelect(TimeCurrent() - 60 * 86400, TimeCurrent() + 60)) return 0;
+   int streak = 0;
+   for(int i = HistoryDealsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = HistoryDealGetTicket(i);
+      if(tk == 0) continue;
+      if(HistoryDealGetInteger(tk, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetString(tk, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(tk, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+      if(tk == g_pauseDeal) break;
+      // break-even stop: closed at the entry price -> neither win nor loss
+      long pid = HistoryDealGetInteger(tk, DEAL_POSITION_ID);
+      double outPx = HistoryDealGetDouble(tk, DEAL_PRICE), inPx = 0;
+      for(int j = i - 1; j >= 0; j--)
+      {
+         ulong tj = HistoryDealGetTicket(j);
+         if(tj != 0 && HistoryDealGetInteger(tj, DEAL_POSITION_ID) == pid &&
+            HistoryDealGetInteger(tj, DEAL_ENTRY) == DEAL_ENTRY_IN) { inPx = HistoryDealGetDouble(tj, DEAL_PRICE); break; }
+      }
+      if(inPx > 0 && MathAbs(outPx - inPx) <= 2 * _Point) continue;
+      double p = HistoryDealGetDouble(tk, DEAL_PROFIT);
+      if(p > 0) break;
+      if(p < 0) { if(lastLoss == 0) lastLoss = tk; streak++; }
+   }
+   return streak;
 }
 
 bool TradingAllowed(string &why)
@@ -631,7 +716,7 @@ bool TradingAllowed(string &why)
    return true;
 }
 
-double CalcLots(double riskPrice)
+double CalcLots(double riskPrice, double riskMult)
 {
    double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
@@ -644,10 +729,19 @@ double CalcLots(double riskPrice)
       double tv = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       if(tv <= 0 || ts <= 0 || riskPrice <= 0) return 0;
-      double money = AccountInfoDouble(ACCOUNT_BALANCE) * InpRiskPercent / 100.0;
+      double money = AccountInfoDouble(ACCOUNT_BALANCE) * InpRiskPercent * riskMult / 100.0;
       lots = money / (riskPrice / ts * tv);
    }
-   if(InpMaxLot > 0) lots = MathMin(lots, InpMaxLot);
+   else lots *= riskMult;
+   if(InpMaxLot > 0 && lots > InpMaxLot)
+   {
+      // v1.10: say so when the hard cap overrides the risk % (it silently did before)
+      if(!g_capWarned)
+         PrintFormat("SweepOB: lot cap InpMaxLot=%.2f is below the %.2f%% risk size (%.2f lots) - real risk is lower than set",
+                     InpMaxLot, InpRiskPercent * riskMult, lots);
+      g_capWarned = true;
+      lots = InpMaxLot;
+   }
    lots = MathFloor(lots / step + 1e-9) * step;
    if(lots < minL)
    {
@@ -735,6 +829,8 @@ bool PlanTrade(int dir, const BreakEvt &e, double ext, double &entry, double &sl
    double far = (dir == -1) ? MathMax(e.obTop, ext) : MathMin(e.obBot, ext);
    sl = (dir == -1) ? far + InpSLBufferPoints * pt : far - InpSLBufferPoints * pt;
    if((dir == -1 && sl <= entry) || (dir == 1 && sl >= entry)) return false;
+   if(InpMinSLPoints > 0 && MathAbs(entry - sl) < InpMinSLPoints * pt)
+      sl = (dir == -1) ? entry + InpMinSLPoints * pt : entry - InpMinSLPoints * pt;
    double risk = MathAbs(entry - sl);
    if(InpMaxSLPoints > 0 && risk / pt > InpMaxSLPoints) return false;
    tp = (dir == -1) ? entry - InpRR * risk : entry + InpRR * risk;
@@ -745,12 +841,31 @@ bool TryEnter(int dir, const BreakEvt &e, double ext, const MqlRates &b)
 {
    string why = "";
    if(!TradingAllowed(why)) { Print("SweepOB: setup skipped - ", why); return false; }
+
+   // loss-streak protection
+   ulong lastLoss = 0;
+   int streak = LossStreak(lastLoss);
+   if(InpPauseAfterLosses > 0 && streak >= InpPauseAfterLosses && lastLoss != g_pauseDeal)
+   {
+      g_pauseDeal = lastLoss;
+      g_pauseLeft = InpPauseSetups;
+      PrintFormat("SweepOB: %d losses in a row -> pausing for the next %d setups", streak, InpPauseSetups);
+   }
+   if(g_pauseLeft > 0)
+   {
+      g_pauseLeft--;
+      PrintFormat("SweepOB: setup skipped - loss-streak pause (%d more)", g_pauseLeft);
+      return false;
+   }
+   double riskMult = (InpReduceAfterLosses > 0 && streak >= InpReduceAfterLosses) ? InpReducedRiskMult : 1.0;
+
    double entry, sl, tp;
    if(!PlanTrade(dir, e, ext, entry, sl, tp)) { Print("SweepOB: invalid / too wide SL, skipped"); return false; }
 
    MqlTick tk;
    if(!SymbolInfoTick(_Symbol, tk)) return false;
-   bool market = (dir == -1) ? (tk.bid >= entry) : (tk.ask <= entry);   // already inside the OB
+   bool market = (InpEntryMode == ENTRY_MARKET) ||
+                 ((dir == -1) ? (tk.bid >= entry) : (tk.ask <= entry));   // already inside the OB
    if(market)
    {
       entry = (dir == -1) ? tk.bid : tk.ask;
@@ -762,7 +877,7 @@ bool TryEnter(int dir, const BreakEvt &e, double ext, const MqlRates &b)
    double risk = MathAbs(entry - sl);
    long stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    if(risk < stopsLvl * _Point) { Print("SweepOB: SL inside stops level, skipped"); return false; }
-   double lots = CalcLots(risk);
+   double lots = CalcLots(risk, riskMult);
    if(lots <= 0) return false;
 
    bool ok;
@@ -787,9 +902,9 @@ bool TryEnter(int dir, const BreakEvt &e, double ext, const MqlRates &b)
 //+------------------------------------------------------------------+
 //| Strategy (once per closed LTF bar)                               |
 //+------------------------------------------------------------------+
-void Arm(int dir, double top, double bot, int obIdx, string lbl, string key, int kz, const MqlRates &b)
+void Arm(int dir, double top, double bot, datetime obT, string lbl, string key, int kz, const MqlRates &b)
 {
-   g_state = 1; g_dir = dir; g_zTop = top; g_zBot = bot; g_zOB = obIdx; g_zLbl = lbl;
+   g_state = 1; g_dir = dir; g_zTop = top; g_zBot = bot; g_zOBT = obT; g_zLbl = lbl;
    g_ext = (dir == -1) ? b.high : b.low;
    g_armT = b.time; g_bars = 0; g_setupKZ = kz;
    g_liq = (dir == -1) ? ltfInt.hiLvl : ltfInt.loLvl;
@@ -817,7 +932,11 @@ void StrategyCore(const MqlRates &b, bool live)
       }
       bool cancel = (g_bars > InpMaxBarsInZone);
       if(InpBiasMode == BIAS_HTF_STRUCTURE && bias != g_dir) cancel = true;
-      if(g_zOB >= 0 && g_zOB < ArraySize(htfEng.ob) && htfEng.ob[g_zOB].tMit != 0 && htfEng.ob[g_zOB].tMit <= closeT) cancel = true;
+      if(g_zOBT > 0)
+      {
+         int zi = htfEng.FindOBByTime(g_zOBT, g_dir);
+         if(zi < 0 || (htfEng.ob[zi].tMit != 0 && htfEng.ob[zi].tMit <= closeT)) cancel = true;
+      }
 
       BreakEvt e;
       if(!cancel && ltfInt.GetEventAt(b.time, g_dir, e) && (!InpRequireCHoCH || e.choch) &&
@@ -859,7 +978,7 @@ void StrategyCore(const MqlRates &b, bool live)
             string key = "O|" + IntegerToString((long)htfEng.ob[i].t) + "|" + IntegerToString(dir);
             if(!Used(key))
             {
-               Arm(dir, htfEng.ob[i].top, htfEng.ob[i].bot, i,
+               Arm(dir, htfEng.ob[i].top, htfEng.ob[i].bot, htfEng.ob[i].t,
                    TFName(InpHTF) + (dir == -1 ? " supply OB" : " demand OB"), key, kz, b);
                return;
             }
@@ -875,7 +994,7 @@ void StrategyCore(const MqlRates &b, bool live)
          bool crossed = (dir == -1) ? (b.high > lvl && g_prevH <= lvl) : (b.low < lvl && g_prevL >= lvl);
          if(lvl > 0 && crossed && !Used(key))
          {
-            Arm(dir, lvl, lvl, -1, dir == -1 ? "PDH" : "PDL", key, kz, b);
+            Arm(dir, lvl, lvl, 0, dir == -1 ? "PDH" : "PDL", key, kz, b);
             return;
          }
       }
@@ -945,6 +1064,7 @@ void UpdatePanel()
       s += StringFormat("State: price in %s, %s, waiting for CHoCH  %d/%d bars\n", g_zLbl,
                         g_swept ? "liquidity swept" : "waiting for sweep", g_bars, InpMaxBarsInZone);
    else s += "State: waiting for price to reach a POI\n";
+   if(g_pauseLeft > 0) s += StringFormat("Loss-streak pause: skipping next %d setups\n", g_pauseLeft);
    s += StringFormat("Today: %d trades, P&L %.2f %s\n", trades, pnl, AccountInfoString(ACCOUNT_CURRENCY));
    Comment(s);
 }

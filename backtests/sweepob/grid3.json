@@ -1,0 +1,8 @@
+{
+ "v100_defaults": {},
+ "v100_tester_tz_bug": {"kz": ["04:30-07:30", "11:30-13:30", "17:30-19:30"]},
+ "v110_defaults": {"sl_buffer_pts": 50, "reduce_after": 2, "reduced_mult": 0.5, "pause_after": 3, "pause_setups": 5},
+ "v110_PDonly": {"sl_buffer_pts": 50, "reduce_after": 2, "reduced_mult": 0.5, "pause_after": 3, "pause_setups": 5, "use_htf_ob": false},
+ "v110_noProtect": {"sl_buffer_pts": 50},
+ "v110_PDonly_noProtect": {"sl_buffer_pts": 50, "use_htf_ob": false}
+}

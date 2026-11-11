@@ -1,0 +1,20 @@
+{
+ "base": {},
+ "minSL50": {"min_sl_pts": 50},
+ "minSL80": {"min_sl_pts": 80},
+ "minSL120": {"min_sl_pts": 120},
+ "buf50": {"sl_buffer_pts": 50},
+ "buf100": {"sl_buffer_pts": 100},
+ "M5": {"ltf_sec": 300, "limit_expiry_bars": 6, "max_bars_in_zone": 12},
+ "M5_long": {"ltf_sec": 300, "limit_expiry_bars": 12, "max_bars_in_zone": 24},
+ "M15": {"ltf_sec": 900, "limit_expiry_bars": 4, "max_bars_in_zone": 8},
+ "market": {"entry_mode": "market"},
+ "LonNY": {"kz_on": [false, true, true]},
+ "OBonly": {"use_prev_day": false},
+ "PDonly": {"use_htf_ob": false},
+ "rr2": {"rr": 2.0},
+ "rr1.5": {"rr": 1.5},
+ "noBE": {"be_r": 0},
+ "mid": {"ob_level": "mid"},
+ "noSweepReq": {"require_sweep": false}
+}

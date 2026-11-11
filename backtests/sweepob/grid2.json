@@ -1,0 +1,15 @@
+{
+ "buf50_PD": {"sl_buffer_pts": 50, "use_htf_ob": false},
+ "buf50_mid": {"sl_buffer_pts": 50, "ob_level": "mid"},
+ "buf50_OB": {"sl_buffer_pts": 50, "use_prev_day": false},
+ "buf50_rr2": {"sl_buffer_pts": 50, "rr": 2.0},
+ "buf30": {"sl_buffer_pts": 30},
+ "buf70": {"sl_buffer_pts": 70},
+ "Asia": {"kz_on": [true, false, false]},
+ "htf5": {"htf_len": 5},
+ "htf20": {"htf_len": 20},
+ "ltf3": {"ltf_len": 3},
+ "ltf8": {"ltf_len": 8},
+ "buf50_be0.5": {"sl_buffer_pts": 50, "be_r": 0.5},
+ "buf50_be2": {"sl_buffer_pts": 50, "be_r": 2.0}
+}
