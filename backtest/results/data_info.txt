@@ -1,8 +1,8 @@
-bars=30300
+bars=78448
 first=2024-11-11 00:00:00+00:00
 last=2026-11-10 23:59:00+00:00
 first_price=2685.24
 last_price=4038.72
-spread_median=0.460
-spread_mean=0.479
-spread_p95=0.648
+spread_median=0.560
+spread_mean=0.573
+spread_p95=0.810

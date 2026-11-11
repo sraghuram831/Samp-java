@@ -3,48 +3,50 @@
 A mechanical backtest of the three setups in the "9 EMA + VWAP Strategy" guide
 (trading the cross, the hold, and the snapback), applied to spot gold.
 
-## Status: interim, small sample
+## Status: limited sample
 
-The results below cover only **22 trading days** in two blocks
-(11–22 Nov 2024 and 26 Oct–10 Nov 2026). The Dukascopy data feed throttled the
-download hard, so the planned one-to-two-year test has not been run yet.
-Treat every number here as indicative only. Re-running the script continues the
-download from the local cache.
+The results cover **57 trading days** in two blocks: 11–22 Nov 2024 (10 days)
+and 7 Sep–10 Nov 2026 (47 days). The Dukascopy data feed throttled the
+download hard, so the planned one-to-two-year test has not been run.
+Re-running the script continues the download from the local cache.
 
 ## Results (all figures in USD per oz, i.e. per 0.01 lot)
 
-Net is after the real bid/ask spread (median 0.46). Gross is at mid prices.
+Net is after the real bid/ask spread (median 0.56). Gross is at mid prices.
 
 | Setup | Trades | Net total | Gross total | Net per trade |
 |---|---|---|---|---|
-| Cross | 523 | −82.89 | +161.27 | −0.16 |
-| Hold | 255 | +24.84 | +142.41 | +0.10 |
-| Snapback | 470 | −167.51 | −57.34 | −0.36 |
+| Cross | 1,392 | −804.52 | −41.12 | −0.58 |
+| Hold | 729 | −396.53 | +9.06 | −0.54 |
+| Snapback | 1,289 | −428.15 | −74.91 | −0.33 |
 
 These totals pool three timeframes (1m, 3m, 5m) and three sessions.
 
-New York session only, which is the session the guide is written for:
+New York session only, which is the session the guide is written for (net):
 
 | Setup | 1m | 3m | 5m |
 |---|---|---|---|
-| Cross | +6.95 (54 trades) | +42.42 (44) | +6.97 (35) |
-| Hold | −35.62 (63) | +26.08 (16) | −9.42 (9) |
-| Snapback | +5.79 (79) | +31.62 (44) | −3.68 (30) |
+| Cross | −168.25 (183 trades) | −102.44 (136) | −172.84 (111) |
+| Hold | −103.97 (176) | −114.87 (53) | −62.36 (26) |
+| Snapback | +118.00 (203) | +9.64 (129) | −45.45 (94) |
 
 ![Equity curves, New York session](results/equity_NewYork.png)
 
-What the sample shows so far:
+What the sample shows:
 
-- **The spread decides the outcome.** The cross and hold setups are positive
-  before costs and roughly break-even or negative after them. Average gross
-  edge per trade (0.3–0.6) is about the size of the spread.
-- **New York is the only session where the cross is positive on all three
-  timeframes.** London and Tokyo are mostly negative after costs.
-- **Longs carried the result.** Cross longs made +56.60 and shorts lost
-  −139.49; gold rose from about 2,685 to 4,039 between the two blocks.
-- **The snapback loses even before costs** outside New York.
-- Win rates are low for the trend setups (20–40%), with winners two to four
-  times the size of losers, as expected for a trailing exit.
+- **The bare mechanical rules have no edge on gold.** Before costs all three
+  setups are close to zero per trade; after the spread all three lose.
+- **The spread is the loss.** Net per trade (−0.3 to −0.6) is roughly one
+  spread, which is what a zero-edge entry costs.
+- **Only 4 of 27 setup/timeframe/session cells are net positive**: the
+  New York snapback on 1m and 3m, and the Tokyo hold on 3m and 5m. With 27
+  cells tested, a few winners are expected by chance.
+- **Both directions lose** for every setup, so the result is not a
+  long/short bias effect.
+- Win rates are low for the trend setups (20–32%), with winners about twice
+  the size of losers, which is not enough to cover them.
+- An earlier run on only 22 days looked better (cross positive in New York);
+  that did not survive the larger sample.
 
 Full per-cell statistics are in `results/summary.csv`, the long/short split in
 `results/by_side.csv`, and every trade in `results/trades.csv.gz`.
